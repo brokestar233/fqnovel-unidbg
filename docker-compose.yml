@@ -1,0 +1,51 @@
+services:
+  fqnovel-unidbg:
+    image: ghcr.io/brokestar233/fqnovel-unidbg:main
+    container_name: fqnovel-unidbg
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${SERVER_PORT:-8099}:8099"
+    environment:
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PORT=6379
+      - SPRING_REDIS_PASSWORD=${REDIS_PASSWORD}
+      - FQ_API_COOKIE=${FQ_API_COOKIE:-store-region=cn-zj; store-region-src=did; install_id=2420480337007787;}
+      - APPLICATION_UNIDBG_ASYNC=true
+      - JAVA_OPTS=-Xms512m -Xmx1g
+    # DNS 配置：使用公共 DNS，避免 OpenClash fake-IP 干扰
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
+      - 8.8.8.8
+    extra_hosts:
+      - "log5-applog.fqnovel.com:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - fqnovel-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: fqnovel-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - fqnovel-net
+
+volumes:
+  redis-data:
+
+networks:
+  fqnovel-net:
+    driver: bridge

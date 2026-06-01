@@ -48,3 +48,6 @@ results/individual/
 tools/results/
 *.json.bak
 /番茄四合一.json
+
+### Docker ###
+.env

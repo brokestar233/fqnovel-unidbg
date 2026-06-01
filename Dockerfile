@@ -30,11 +30,12 @@ LABEL org.opencontainers.image.source="https://github.com/brokestar233/fqnovel-u
 LABEL org.opencontainers.image.description="FQNovel Unidbg Signature Server"
 LABEL org.opencontainers.image.licenses="MIT"
 
-# 安装 unidbg/JNA 需要的原生库 + tini + wget
+# 安装 unidbg/JNA 需要的原生库 + tini + wget + openssl（SSL 私钥格式转换）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       tini \
       wget \
+      openssl \
       libstdc++6 \
       libc6 \
     && rm -rf /var/lib/apt/lists/*
@@ -54,9 +55,9 @@ USER appuser
 # 暴露端口
 EXPOSE 8099
 
-# 健康检查（Spring Boot Actuator 需要配置，否则用简单方式）
+# 健康检查（支持 HTTP 和 HTTPS）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD wget -qO- http://localhost:8099/api/fq-signature/health 2>/dev/null || exit 1
+  CMD wget -qO- --no-check-certificate https://localhost:8099/api/fqnovel/health 2>/dev/null || wget -qO- http://localhost:8099/api/fqnovel/actuator/health 2>/dev/null || exit 1
 
 # JVM 参数可通过环境变量 JAVA_OPTS 覆盖
 ENV JAVA_OPTS="-Xms512m -Xmx1g"

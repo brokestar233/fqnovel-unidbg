@@ -16,6 +16,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import javax.annotation.Resource;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
@@ -49,7 +50,7 @@ public class DeviceRegisterClientService {
 
         normalizeDeviceInfo(deviceInfo);
 
-        String registerUrl = buildRegisterUrl(deviceInfo);
+        URI registerUrl = buildRegisterUrl(deviceInfo);
         HttpHeaders headers = buildHeaders(deviceInfo);
         Map<String, Object> payload = buildPayload(deviceInfo);
 
@@ -132,7 +133,7 @@ public class DeviceRegisterClientService {
         return headers;
     }
 
-    private String buildRegisterUrl(DeviceInfo deviceInfo) {
+    private URI buildRegisterUrl(DeviceInfo deviceInfo) {
         return UriComponentsBuilder
             .fromHttpUrl(REGISTER_URL)
             .queryParam("aid", "1967")
@@ -142,8 +143,8 @@ public class DeviceRegisterClientService {
             .queryParam("_rticket", String.valueOf(deviceInfo.getRticket()))
             .queryParam("use_store_region_cookie", "1")
             .queryParam("okhttp_version", "4.2.137.76-fanqie")
-            .build(false)
-            .toUriString();
+            .build()
+            .toUri();
     }
 
     private Map<String, Object> buildPayload(DeviceInfo deviceInfo) {

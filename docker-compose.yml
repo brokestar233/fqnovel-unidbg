@@ -14,13 +14,15 @@ services:
       - FQ_API_COOKIE=${FQ_API_COOKIE:-store-region=cn-zj; store-region-src=did; install_id=2420480337007787;}
       - APPLICATION_UNIDBG_ASYNC=true
       - JAVA_OPTS=-Xms512m -Xmx1g
-    # DNS 配置：使用公共 DNS，避免 OpenClash fake-IP 干扰
-    dns:
-      - 223.5.5.5
-      - 119.29.29.29
-      - 8.8.8.8
-    extra_hosts:
-      - "log5-applog.fqnovel.com:host-gateway"
+      - PROXY_HOST=${PROXY_HOST:-192.168.50.3}
+      - PROXY_PORT=${PROXY_PORT:-10086}
+      - DOH_SERVER=${DOH_SERVER:-https://1.12.12.12/dns-query}
+      - SSL_ENABLED=${SSL_ENABLED:-false}
+      - SSL_CERTIFICATE=${SSL_CERTIFICATE:-/etc/brokestar.crt}
+      - SSL_KEY=${SSL_KEY:-/etc/brokestar.key}
+    volumes:
+      - "${SSL_CERTIFICATE:-/etc/brokestar.crt}:/etc/brokestar.crt:ro"
+      - "${SSL_KEY:-/etc/brokestar.key}:/etc/brokestar.key:ro"
     depends_on:
       redis:
         condition: service_healthy

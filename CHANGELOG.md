@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- SOCKS5 出口代理适配 `rusty_proxy`（随机 IPv6 代理）认证升级：`HttpClientConfig` 手写 SOCKS5 握手支持 RFC 1929 用户名/密码认证（新增 `PROXY_USERNAME`/`PROXY_PASSWORD` 环境变量，`docker-compose.yml` 已接入）
+- 「一设备一用户名」出口 IP 绑定：设备池选择设备时（`DevicePoolService#nextDevice`/`getLastUsedDevice`/`findDeviceById`）将设备 id 写入线程级 `ProxySessionContext`，作为 SOCKS5 认证用户名（session id），代理侧按 session 绑定固定出口 IPv6；通过合成 `localAddress`（127.x.y.z 路由键）将 Apache HttpClient 连接池按设备分桶，设备间连接互不复用，避免串 IP
+- `ProxySessionContextFilter`：请求结束清理线程代理 session，防止 Tomcat 线程复用导致 session 泄漏
+- `HttpClientConfigProxyIT`：实连代理的集成测试（`PROXY_IT=1` 开启），验证同一设备出口 IP 稳定、不同设备出口 IP 不同
+
 ## [v0.0.6] - 2026-08-09
 
 ### Added

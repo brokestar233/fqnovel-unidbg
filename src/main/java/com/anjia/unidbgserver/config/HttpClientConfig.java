@@ -1,6 +1,8 @@
 package com.anjia.unidbgserver.config;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
 import org.apache.http.conn.socket.ConnectionSocketFactory;
@@ -16,10 +18,11 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
-import org.apache.http.client.config.RequestConfig;
-
 import javax.net.ssl.SSLContext;
+import java.net.InetAddress;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 @Configuration
@@ -47,6 +50,46 @@ public class HttpClientConfig {
     @Value("${PROXY_PORT:}")
     private String socksProxyPort;
 
+    // SOCKS5 用户名/密码认证（RFC 1929），适配 rusty_proxy：
+    // 用户名即 session id，代理侧按 session id 绑定出口 IPv6（空闲超时后释放）。
+    // PROXY_USERNAME 配置时作为默认固定 session；未配置时无设备上下文的连接使用随机 session。
+    @Value("${PROXY_USERNAME:}")
+    private String socksProxyUsername;
+
+    @Value("${PROXY_PASSWORD:}")
+    private String socksProxyPassword;
+
+    /**
+     * session id -> 合成 localAddress（127.x.y.z，仅作连接池路由键，从不真正 bind）。
+     * Apache HttpClient 的 HttpRoute 包含 localAddress，连接池按 route 分池，
+     * 因此每个设备（session）拿到独立的连接桶，设备之间不会复用彼此的代理连接。
+     */
+    private static final ConcurrentHashMap<String, InetAddress> SESSION_TO_ADDRESS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<InetAddress, String> ADDRESS_TO_SESSION = new ConcurrentHashMap<>();
+    private static final AtomicInteger SESSION_ADDRESS_SEQ = new AtomicInteger(2);
+
+    static InetAddress syntheticAddressFor(String sessionId) {
+        return SESSION_TO_ADDRESS.computeIfAbsent(sessionId, id -> {
+            // 序号映射到 127.0.a.b.c（跳过 127.0.0.0/1），设备池规模远小于地址空间
+            int seq = SESSION_ADDRESS_SEQ.getAndIncrement() & 0xFFFF;
+            if (seq < 2) {
+                seq += 2;
+            }
+            byte[] addr = new byte[]{127, 0, (byte) ((seq >> 8) & 0xFF), (byte) (seq & 0xFF)};
+            try {
+                InetAddress address = InetAddress.getByAddress(addr);
+                ADDRESS_TO_SESSION.putIfAbsent(address, id);
+                return address;
+            } catch (java.net.UnknownHostException e) {
+                throw new IllegalStateException("构造合成 localAddress 失败", e);
+            }
+        });
+    }
+
+    static String sessionIdOf(InetAddress address) {
+        return address == null ? null : ADDRESS_TO_SESSION.get(address);
+    }
+
     @Bean
     public RestTemplate restTemplate() throws Exception {
         SSLContext sslContext = SSLContextBuilder.create()
@@ -56,8 +99,18 @@ public class HttpClientConfig {
 
         ConnectionSocketFactory plainSocketFactory;
         ConnectionSocketFactory httpsSocketFactory;
+        HttpComponentsClientHttpRequestFactory requestFactory;
 
-        if (socksProxyHost != null && !socksProxyHost.isEmpty()) {
+        RequestConfig baseRequestConfig = RequestConfig.custom()
+            .setConnectTimeout(connectTimeoutMs)
+            .setSocketTimeout(readTimeoutMs)
+            .setConnectionRequestTimeout(connectTimeoutMs)
+            .build();
+
+        boolean useProxy = socksProxyHost != null && !socksProxyHost.isEmpty();
+        boolean useAuth = socksProxyPassword != null && !socksProxyPassword.isEmpty();
+
+        if (useProxy) {
             int port = 1080;
             if (socksProxyPort != null && !socksProxyPort.isEmpty()) {
                 try {
@@ -67,11 +120,19 @@ public class HttpClientConfig {
             }
             log.info("检测到 SOCKS5 代理配置: {}:{}，Apache HttpClient 将通过代理连接", socksProxyHost, port);
 
-            plainSocketFactory = new SocksProxyConnectionSocketFactory(socksProxyHost, port);
-            httpsSocketFactory = new SocksProxySSLConnectionSocketFactory(socksProxyHost, port, sslContext);
+            plainSocketFactory = new SocksProxyConnectionSocketFactory(socksProxyHost, port,
+                    socksProxyUsername, socksProxyPassword);
+            httpsSocketFactory = new SocksProxySSLConnectionSocketFactory(socksProxyHost, port,
+                    socksProxyUsername, socksProxyPassword, sslContext);
+            if (useAuth) {
+                requestFactory = new SessionRoutingRequestFactory(baseRequestConfig);
+            } else {
+                requestFactory = new HttpComponentsClientHttpRequestFactory();
+            }
         } else {
             plainSocketFactory = PlainConnectionSocketFactory.getSocketFactory();
             httpsSocketFactory = sslSocketFactory;
+            requestFactory = new HttpComponentsClientHttpRequestFactory();
         }
 
         Registry<ConnectionSocketFactory> socketFactoryRegistry = RegistryBuilder.<ConnectionSocketFactory>create()
@@ -85,26 +146,46 @@ public class HttpClientConfig {
         connectionManager.setDefaultMaxPerRoute(maxConnectionsPerRoute);
         connectionManager.setValidateAfterInactivity(30000);
 
-        RequestConfig requestConfig = RequestConfig.custom()
-            .setConnectTimeout(connectTimeoutMs)
-            .setSocketTimeout(readTimeoutMs)
-            .setConnectionRequestTimeout(connectTimeoutMs)
-            .build();
-
         CloseableHttpClient httpClient = HttpClientBuilder.create()
             .setConnectionManager(connectionManager)
-            .setDefaultRequestConfig(requestConfig)
+            .setDefaultRequestConfig(baseRequestConfig)
             .evictIdleConnections(60, TimeUnit.SECONDS)
             .setConnectionTimeToLive(120, TimeUnit.SECONDS)
             .disableCookieManagement()
             .build();
 
-        HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory(httpClient);
-        factory.setConnectTimeout(connectTimeoutMs);
-        factory.setReadTimeout(readTimeoutMs);
-        factory.setConnectionRequestTimeout(connectTimeoutMs);
+        requestFactory.setHttpClient(httpClient);
+        requestFactory.setConnectTimeout(connectTimeoutMs);
+        requestFactory.setReadTimeout(readTimeoutMs);
+        requestFactory.setConnectionRequestTimeout(connectTimeoutMs);
 
-        return new RestTemplate(factory);
+        return new RestTemplate(requestFactory);
+    }
+
+    /**
+     * 按当前线程的代理 session（设备 id）为请求附加合成 localAddress，
+     * 使连接池按设备分桶、SOCKS5 认证用户名与设备一一对应。
+     */
+    private static final class SessionRoutingRequestFactory extends HttpComponentsClientHttpRequestFactory {
+
+        private final RequestConfig baseRequestConfig;
+
+        SessionRoutingRequestFactory(RequestConfig baseRequestConfig) {
+            this.baseRequestConfig = baseRequestConfig;
+        }
+
+        @Override
+        protected void postProcessHttpRequest(HttpUriRequest request) {
+            String sessionId = ProxySessionContext.get();
+            if (sessionId == null || sessionId.isEmpty()
+                    || !(request instanceof org.apache.http.client.methods.HttpRequestBase)) {
+                return;
+            }
+            InetAddress synthetic = syntheticAddressFor(sessionId);
+            ((org.apache.http.client.methods.HttpRequestBase) request).setConfig(RequestConfig.copy(baseRequestConfig)
+                .setLocalAddress(synthetic)
+                .build());
+        }
     }
 
     /**
@@ -114,12 +195,16 @@ public class HttpClientConfig {
      * 避免与 JVM 系统属性 -DsocksProxyHost 产生冲突。
      */
     private static class SocksProxyConnectionSocketFactory implements ConnectionSocketFactory {
-        private final String proxyHost;
-        private final int proxyPort;
+        protected final String proxyHost;
+        protected final int proxyPort;
+        protected final String proxyUsername;
+        protected final String proxyPassword;
 
-        SocksProxyConnectionSocketFactory(String proxyHost, int proxyPort) {
+        SocksProxyConnectionSocketFactory(String proxyHost, int proxyPort, String proxyUsername, String proxyPassword) {
             this.proxyHost = proxyHost;
             this.proxyPort = proxyPort;
+            this.proxyUsername = proxyUsername;
+            this.proxyPassword = proxyPassword;
         }
 
         @Override
@@ -133,11 +218,11 @@ public class HttpClientConfig {
                 java.net.InetSocketAddress localAddress, org.apache.http.protocol.HttpContext context)
                 throws java.io.IOException {
             java.net.Socket sock = socket != null ? socket : createSocket(context);
-            if (localAddress != null) {
-                sock.bind(localAddress);
-            }
             try {
-                socks5Connect(sock, host.getHostName(), host.getPort(), connectTimeout, this.proxyHost, this.proxyPort);
+                // localAddress 仅是 session 路由键（127.x.y.z），代理模式下不真正 bind
+                String sessionId = resolveSessionId(localAddress);
+                socks5Connect(sock, host.getHostName(), host.getPort(), connectTimeout, this.proxyHost, this.proxyPort,
+                        sessionId, this.proxyPassword);
             } catch (java.io.IOException e) {
                 try {
                     sock.close();
@@ -146,6 +231,11 @@ public class HttpClientConfig {
                 throw e;
             }
             return sock;
+        }
+
+        protected String resolveSessionId(java.net.InetSocketAddress localAddress) {
+            String sessionId = sessionIdOf(localAddress == null ? null : localAddress.getAddress());
+            return sessionId != null ? sessionId : nextSessionId(proxyUsername);
         }
     }
 
@@ -156,13 +246,12 @@ public class HttpClientConfig {
      * 避免与 JVM 系统属性 -DsocksProxyHost 产生冲突导致 TLS 连接到错误目标。
      */
     private static class SocksProxySSLConnectionSocketFactory extends SSLConnectionSocketFactory {
-        private final String proxyHost;
-        private final int proxyPort;
+        private final SocksProxyConnectionSocketFactory delegate;
 
-        SocksProxySSLConnectionSocketFactory(String proxyHost, int proxyPort, SSLContext sslContext) {
+        SocksProxySSLConnectionSocketFactory(String proxyHost, int proxyPort, String proxyUsername,
+                String proxyPassword, SSLContext sslContext) {
             super(sslContext);
-            this.proxyHost = proxyHost;
-            this.proxyPort = proxyPort;
+            this.delegate = new SocksProxyConnectionSocketFactory(proxyHost, proxyPort, proxyUsername, proxyPassword);
         }
 
         @Override
@@ -176,11 +265,10 @@ public class HttpClientConfig {
                 java.net.InetSocketAddress localAddress, org.apache.http.protocol.HttpContext context)
                 throws java.io.IOException {
             java.net.Socket sock = socket != null ? socket : createSocket(context);
-            if (localAddress != null) {
-                sock.bind(localAddress);
-            }
             try {
-                socks5Connect(sock, host.getHostName(), host.getPort(), connectTimeout, this.proxyHost, this.proxyPort);
+                String sessionId = delegate.resolveSessionId(localAddress);
+                socks5Connect(sock, host.getHostName(), host.getPort(), connectTimeout,
+                        delegate.proxyHost, delegate.proxyPort, sessionId, delegate.proxyPassword);
             } catch (java.io.IOException e) {
                 try {
                     sock.close();
@@ -193,11 +281,23 @@ public class HttpClientConfig {
     }
 
     /**
-     * 手动执行 SOCKS5 协议握手（无认证模式）。
+     * 计算无设备上下文连接使用的 session id（即 SOCKS5 认证用户名）。
+     * 未配置固定用户名时每条连接生成随机 session id，等价于"每条新连接换一个出口 IPv6"。
+     */
+    private static String nextSessionId(String configuredUsername) {
+        if (configuredUsername != null && !configuredUsername.isEmpty()) {
+            return configuredUsername;
+        }
+        return "fq-" + Long.toHexString(System.nanoTime()) + "-"
+                + Integer.toHexString(new java.security.SecureRandom().nextInt());
+    }
+
+    /**
+     * 手动执行 SOCKS5 协议握手（支持无认证与 RFC 1929 用户名/密码认证）。
      * <ol>
      *   <li>TCP 连接到代理服务器</li>
-     *   <li>发送 SOCKS5 握手请求（版本+认证方法）</li>
-     *   <li>接收代理的认证方法选择</li>
+     *   <li>发送 SOCKS5 握手请求（版本+候选认证方法）</li>
+     *   <li>接收代理的认证方法选择；若选择用户名/密码则执行 RFC 1929 子协商</li>
      *   <li>发送 CONNECT 命令到目标主机</li>
      *   <li>接收代理的连接确认</li>
      * </ol>
@@ -206,9 +306,13 @@ public class HttpClientConfig {
      * @param targetHost     目标主机名
      * @param targetPort     目标端口
      * @param connectTimeout 连接超时（毫秒）
+     * @param username       认证用户名（session id）
+     * @param password       认证密码，为 null/空表示仅尝试无认证
      */
     private static void socks5Connect(java.net.Socket sock, String targetHost, int targetPort, int connectTimeout,
-            String proxyHost, int proxyPort) throws java.io.IOException {
+            String proxyHost, int proxyPort, String username, String password) throws java.io.IOException {
+        boolean useAuth = password != null && !password.isEmpty();
+
         // 1. 连接到 SOCKS5 代理服务器
         java.net.SocketAddress proxyAddr = new java.net.InetSocketAddress(proxyHost, proxyPort);
         sock.connect(proxyAddr, connectTimeout);
@@ -217,8 +321,12 @@ public class HttpClientConfig {
         java.io.InputStream in = sock.getInputStream();
         java.io.OutputStream out = sock.getOutputStream();
 
-        // 2. SOCKS5 握手: 版本 5，1 种认证方法（无认证 = 0x00）
-        out.write(new byte[]{0x05, 0x01, 0x00});
+        // 2. SOCKS5 握手: 版本 5，候选认证方法（无认证 0x00 + 用户名/密码 0x02）
+        if (useAuth) {
+            out.write(new byte[]{0x05, 0x02, 0x00, 0x02});
+        } else {
+            out.write(new byte[]{0x05, 0x01, 0x00});
+        }
         out.flush();
 
         // 3. 读取代理响应: 版本 + 选择的认证方法
@@ -227,8 +335,18 @@ public class HttpClientConfig {
         if (authResponse[0] != 0x05) {
             throw new java.io.IOException("SOCKS5 代理返回异常版本: 0x" + Integer.toHexString(authResponse[0] & 0xFF));
         }
-        if (authResponse[1] != 0x00) {
-            throw new java.io.IOException("SOCKS5 代理要求不支持的认证方法: 0x" + Integer.toHexString(authResponse[1] & 0xFF));
+        int selectedMethod = authResponse[1] & 0xFF;
+        if (selectedMethod == 0xFF) {
+            throw new java.io.IOException("SOCKS5 代理不接受任何候选认证方法"
+                    + (useAuth ? "（已提供无认证+用户名/密码）" : "（仅提供无认证，若代理需要认证请配置 PROXY_PASSWORD）"));
+        }
+        if (selectedMethod == 0x02) {
+            if (!useAuth) {
+                throw new java.io.IOException("SOCKS5 代理要求用户名/密码认证，但未配置 PROXY_PASSWORD");
+            }
+            performUsernamePasswordAuth(in, out, username, password);
+        } else if (selectedMethod != 0x00) {
+            throw new java.io.IOException("SOCKS5 代理要求不支持的认证方法: 0x" + Integer.toHexString(selectedMethod));
         }
 
         // 4. 发送 CONNECT 命令（域名类型 0x03）
@@ -284,7 +402,41 @@ public class HttpClientConfig {
 
         // 恢复默认超时（后续 SSL 握手会自行设置）
         sock.setSoTimeout(0);
-        log.debug("SOCKS5 隧道已建立: {} -> {}:{}", proxyHost + ":" + proxyPort, targetHost, targetPort);
+        log.debug("SOCKS5 隧道已建立: {} (session={}) -> {}:{}", proxyHost + ":" + proxyPort, username, targetHost, targetPort);
+    }
+
+    /**
+     * RFC 1929 用户名/密码子协商。
+     * 发送 VER(0x01) + ULEN + UNAME + PLEN + PASSWD，期待响应 VER(0x01) + STATUS(0x00=成功)。
+     */
+    private static void performUsernamePasswordAuth(java.io.InputStream in, java.io.OutputStream out,
+            String username, String password) throws java.io.IOException {
+        if (username == null || username.isEmpty()) {
+            throw new java.io.IOException("SOCKS5 用户名（session id）不能为空");
+        }
+        byte[] userBytes = username.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] passBytes = password.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (userBytes.length > 255 || passBytes.length > 255) {
+            throw new java.io.IOException("SOCKS5 用户名或密码超过 255 字节限制");
+        }
+
+        byte[] authRequest = new byte[3 + userBytes.length + passBytes.length];
+        int idx = 0;
+        authRequest[idx++] = 0x01; // 子协商版本
+        authRequest[idx++] = (byte) userBytes.length;
+        System.arraycopy(userBytes, 0, authRequest, idx, userBytes.length);
+        idx += userBytes.length;
+        authRequest[idx++] = (byte) passBytes.length;
+        System.arraycopy(passBytes, 0, authRequest, idx, passBytes.length);
+        out.write(authRequest);
+        out.flush();
+
+        byte[] authResult = new byte[2];
+        readFully(in, authResult);
+        if ((authResult[1] & 0xFF) != 0x00) {
+            throw new java.io.IOException("SOCKS5 代理认证失败（用户名/密码错误，status=0x"
+                    + Integer.toHexString(authResult[1] & 0xFF) + "）");
+        }
     }
 
     /**

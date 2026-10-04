@@ -1,6 +1,7 @@
 package com.anjia.unidbgserver.service;
 
 import com.anjia.unidbgserver.config.FQApiProperties;
+import com.anjia.unidbgserver.config.ProxySessionContext;
 import com.anjia.unidbgserver.dto.DeviceInfo;
 import com.anjia.unidbgserver.dto.DeviceRegisterRequest;
 import com.anjia.unidbgserver.utils.CommonUtils;
@@ -53,20 +54,20 @@ public class DevicePoolService {
 
     public DeviceInfo nextDevice() {
         if (!isEnabled()) {
-            return buildFallbackDevice();
+            return bindProxySessionAndReturn(buildFallbackDevice());
         }
 
         ensurePoolReady();
 
         if (devicePool.isEmpty()) {
             log.warn("设备池为空，退回静态配置设备");
-            return buildFallbackDevice();
+            return bindProxySessionAndReturn(buildFallbackDevice());
         }
 
         int idx = Math.abs(roundRobinIndex.getAndIncrement());
         DeviceInfo device = devicePool.get(idx % devicePool.size());
         this.lastUsedDevice = device;
-        return device;
+        return bindProxySessionAndReturn(device);
     }
 
     /**
@@ -75,7 +76,7 @@ public class DevicePoolService {
      */
     public DeviceInfo getLastUsedDevice() {
         DeviceInfo device = lastUsedDevice;
-        return device != null ? device : buildFallbackDevice();
+        return bindProxySessionAndReturn(device != null ? device : buildFallbackDevice());
     }
 
 
@@ -88,17 +89,31 @@ public class DevicePoolService {
 
         if (!isEnabled()) {
             DeviceInfo fallback = buildFallbackDevice();
-            return normalizedDeviceId.equals(fallback.getDeviceId()) ? fallback : null;
+            return normalizedDeviceId.equals(fallback.getDeviceId()) ? bindProxySessionAndReturn(fallback) : null;
         }
 
         ensurePoolReady();
         for (DeviceInfo deviceInfo : devicePool) {
             if (deviceInfo != null && normalizedDeviceId.equals(deviceInfo.getDeviceId())) {
-                return deviceInfo;
+                return bindProxySessionAndReturn(deviceInfo);
             }
         }
 
         return null;
+    }
+
+    /**
+     * 将设备绑定到当前线程的代理 session（SOCKS5 用户名），
+     * 使该设备后续的 HTTP 请求走代理侧专属的出口 IPv6（一设备一 IP）。
+     */
+    private DeviceInfo bindProxySessionAndReturn(DeviceInfo device) {
+        if (device != null) {
+            String sessionId = CommonUtils.isNotBlank(device.getDeviceId()) ? device.getDeviceId().trim()
+                : CommonUtils.isNotBlank(device.getInstallId()) ? device.getInstallId().trim()
+                : "fq-default";
+            ProxySessionContext.set(sessionId);
+        }
+        return device;
     }
 
     public void removeAndReplenish(DeviceInfo badDevice, String reason) {

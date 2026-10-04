@@ -16,6 +16,10 @@ services:
       - JAVA_OPTS=-Xms512m -Xmx1g
       - PROXY_HOST=${PROXY_HOST:-192.168.50.3}
       - PROXY_PORT=${PROXY_PORT:-10086}
+      # SOCKS5 用户名/密码认证（RFC 1929）。用户名即 session id，绑定出口 IPv6；
+      # PROXY_USERNAME 留空则每条连接随机 session（每连接换出口 IPv6）
+      - PROXY_USERNAME=${PROXY_USERNAME:-}
+      - PROXY_PASSWORD=${PROXY_PASSWORD:-114514}
       - DOH_SERVER=${DOH_SERVER:-https://1.12.12.12/dns-query}
       - SSL_ENABLED=${SSL_ENABLED:-false}
       - SSL_CERTIFICATE=${SSL_CERTIFICATE:-/etc/brokestar.crt}

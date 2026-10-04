@@ -74,3 +74,12 @@ tools/venv/
 
 ### Build artifacts ###
 /fqnovel-unidbg.jar
+
+### Diagnostic probes ###
+probe/
+.zcodeignore
+
+### 用户本地APK（逆向用） ###
+*.APK
+*.apk
+!src/main/resources/**/*.apk

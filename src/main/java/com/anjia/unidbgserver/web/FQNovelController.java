@@ -141,7 +141,8 @@ public class FQNovelController {
     @GetMapping("/chapter/enriched/{bookId}/{chapterId}")
     public CompletableFuture<FQNovelResponse<FQNovelChapterInfo>> getEnrichedChapterContent(
             @PathVariable String bookId,
-            @PathVariable String chapterId) {
+            @PathVariable String chapterId,
+            javax.servlet.http.HttpServletRequest servletRequest) {
 
         log.debug("获取段评增强章节内容请求 - bookId: {}, chapterId: {}", bookId, chapterId);
 
@@ -162,9 +163,28 @@ public class FQNovelController {
         request.setBookId(bookId.trim());
         request.setChapterId(chapterId.trim());
 
+        // 徽章图片使用绝对 URL（阅读 App 对正文内相对路径解析不可靠）
+        String baseUrl = resolveBaseUrl(servletRequest);
+
         return fqNovelService.getChapterContent(request)
                 .thenCompose(response ->
-                    commentEnrichmentService.enrichChapter(response, bookId, chapterId));
+                    commentEnrichmentService.enrichChapter(response, bookId, chapterId, baseUrl));
+    }
+
+    /**
+     * 从请求推导对外访问基址：优先 Host 头（含端口），回退 requestURL。
+     */
+    private String resolveBaseUrl(javax.servlet.http.HttpServletRequest request) {
+        try {
+            String host = request.getHeader("Host");
+            if (host != null && !host.isEmpty()) {
+                return request.getScheme() + "://" + host;
+            }
+            java.net.URL url = new java.net.URL(request.getRequestURL().toString());
+            return url.getProtocol() + "://" + url.getAuthority();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /**

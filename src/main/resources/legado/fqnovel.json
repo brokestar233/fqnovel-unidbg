@@ -8,12 +8,12 @@
         "contentType": 1,
         "customOrder": 1,
         "enabled": true,
-        "jsLib": "function showCmt(url,sources,ydv){let{java,source}=this;var bu=String(source.bookSourceUrl).replace(/\\/+$/,'');var fu=bu+url;var cfg='{\"heightPercentage\":0.8,\"isDraggable\":true,\"dismissOnTouchOutside\":true,\"shouldDimBackground\":true,\"isHideable\":true,\"expandedCornersRadius\":20,\"hardwareAccelerated\":true}';try{java.showBrowser(fu,null,'window.java=java;',cfg)}catch(e1){try{java.startBrowser(fu,(sources||'番茄')+'段评')}catch(e2){}}}",
+        "jsLib": "function showCmt(url,sources,ydv){let{java,source}=this;var bu=String(source.bookSourceUrl).replace(/\\/+$/,'');var fu=bu+url;var cfg='{\"heightPercentage\":0.8,\"isDraggable\":true,\"dismissOnTouchOutside\":true,\"shouldDimBackground\":true,\"isHideable\":true,\"expandedCornersRadius\":20,\"hardwareAccelerated\":true}';try{java.showBrowser(fu,null,'window.java=java;',cfg)}catch(e1){try{java.startBrowser(fu,(sources||'番茄')+'段评')}catch(e2){}}}function showCmt2(bookId,chapterId,paraIndex){var source=this.source,java=this.java;var bu=String(source.bookSourceUrl).replace(/\\/+$/,'');var fu=bu+'/api/ssr/comment-page?bookId='+bookId+'&chapterId='+chapterId+'&paraIndex='+paraIndex;var cfg='{\"heightPercentage\":0.8,\"isDraggable\":true,\"dismissOnTouchOutside\":true,\"shouldDimBackground\":true,\"isHideable\":true,\"expandedCornersRadius\":20,\"hardwareAccelerated\":true}';try{java.showBrowser(fu,null,'window.java=java;',cfg)}catch(e1){try{java.startBrowser(fu,'番茄段评')}catch(e2){}}}",
         "enabledCookieJar": false,
         "enabledExplore": true,
         "exploreUrl": "搜索::http://[替换为你的ip或域名]:[你的端口号]/api/fqsearch/books?query={{key}}&offset={{(page-1)*20}}&count=20\n热门推荐::http://[替换为你的ip或域名]:[你的端口号]/api/fqsearch/books?query=推荐&offset=0&count=20\n最近更新::http://[替换为你的ip或域名]:[你的端口号]/api/fqsearch/books?query=最新&offset=0&count=20",
         "header": "Content-Type: application/json\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "lastUpdateTime": 1782367057010,
+        "lastUpdateTime": 1791111680499,
         "respondTime": 180000,
         "ruleBookInfo": {
             "author": "$.data.author",
@@ -22,7 +22,7 @@
             "kind": "$.data.category",
             "lastChapter": "$.data.lastChapterTitle",
             "name": "$.data.bookName",
-            "tocUrl": "@js:\nvar bid = java.getString('$.data.bookId');\njava.put('book_id', bid);\nsource.bookSourceUrl + '/api/fqsearch/directory/' + bid",
+            "tocUrl": "@js:\nvar bid = java.getString('$.data.bookId');\njava.put('book_id', bid);\nsource.bookSourceUrl + '/api/fqsearch/directory/' + bid + ',{\"timeout\":120000}'",
             "wordCount": "$.data.wordNumber"
         },
         "ruleContent": {
@@ -32,7 +32,7 @@
         "ruleExplore": {
             "author": "$.author",
             "bookList": "$.data.books[*]||$.data.book_info[*]",
-            "bookUrl": "http://[替换为你的ip或域名]:[你的端口号]/api/fqnovel/book/{{$.bookId}}",
+            "bookUrl": "http://[替换为你的ip或域名]:[你的端口号]/api/fqnovel/book/{{$.bookId}},{\"timeout\":120000}",
             "coverUrl": "$.coverUrl",
             "intro": "$.description",
             "kind": "$.category",
@@ -43,7 +43,7 @@
         "ruleSearch": {
             "author": "$.author",
             "bookList": "$.data.books[*]||$.data",
-            "bookUrl": "http://[替换为你的ip或域名]:[你的端口号]/api/fqnovel/book/{{$.bookId}}",
+            "bookUrl": "http://[替换为你的ip或域名]:[你的端口号]/api/fqnovel/book/{{$.bookId}},{\"timeout\":120000}",
             "coverUrl": "$.coverUrl",
             "intro": "$.description",
             "kind": "$.category",
@@ -54,7 +54,7 @@
         "ruleToc": {
             "chapterList": "$.data.item_data_list[*]",
             "chapterName": "$.title",
-            "chapterUrl": "@js:\nsource.bookSourceUrl + `/api/fqnovel/chapter/enriched/${java.get(\"book_id\")}/${java.getString(\"$.item_id\")}`",
+            "chapterUrl": "@js:\nsource.bookSourceUrl + `/api/fqnovel/chapter/enriched/${java.get(\"book_id\")}/${java.getString(\"$.item_id\")}` + ',{\"timeout\":120000}'",
             "volGroup": "$.volume_name",
             "updateTime": "{{$.volume_name}} | {{$.chapter_word_number}}字 | {{java.timeFormatUTC(java.getString(\"$.first_pass_time\") * 1000, 'yyyy-MM-dd HH:mm:ss', 8)}}##第一卷：默认\n@js:\nif (result.startsWith(\" |\")) result = result.slice(2)\nif (result.startsWith(\"| \")) result = result.slice(2)\nresult"
         },

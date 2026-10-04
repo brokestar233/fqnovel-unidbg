@@ -37,12 +37,14 @@ public class CommentEnrichmentService {
      * @param chapterResponse 原始章节响应
      * @param bookId 书籍ID
      * @param chapterId 章节ID
+     * @param baseUrl 服务对外访问基址（如 https://192.168.50.3:8099），用于生成徽章绝对 URL
      * @return 增强后的章节内容
      */
     public CompletableFuture<FQNovelResponse<FQNovelChapterInfo>> enrichChapter(
             FQNovelResponse<FQNovelChapterInfo> chapterResponse,
             String bookId,
-            String chapterId) {
+            String chapterId,
+            String baseUrl) {
 
         // 如果原始响应失败，直接返回
         if (chapterResponse.getCode() != 0 || chapterResponse.getData() == null) {
@@ -71,7 +73,7 @@ public class CommentEnrichmentService {
 
                         String title = chapterResponse.getData().getTitle();
                         String enrichedContent = injectCommentIcons(
-                                txtContent, commentCounts, bookId, chapterId, title);
+                            txtContent, commentCounts, bookId, chapterId, title, baseUrl);
                         chapterResponse.getData().setTxtContent(enrichedContent);
                         log.info("章节 {} 段评增强完成，共 {} 个段落有评论",
                                 chapterId, commentCounts.size());
@@ -150,7 +152,8 @@ public class CommentEnrichmentService {
             Map<Integer, Integer> commentCounts,
             String bookId,
             String chapterId,
-            String title) {
+            String title,
+            String baseUrl) {
 
         String[] paragraphs = content.split("\n", -1);
         StringBuilder enriched = new StringBuilder();
@@ -185,15 +188,10 @@ public class CommentEnrichmentService {
             if (!isTitleLine) {
                 Integer count = commentCounts.get(paraIndex);
                 if (count != null && count > 0) {
-                    String commentUrl = COMMENT_PAGE_PATH
-                            + "?bookId=" + encodeParam(bookId)
-                            + "&chapterId=" + encodeParam(chapterId)
-                            + "&paraIndex=" + paraIndex;
-
-                    String badgeSrc = generateBadgeSrc(count, commentUrl);
+                    String badgeSrc = generateBadgeSrc(count, bookId, chapterId, paraIndex, baseUrl);
                     if (badgeSrc != null) {
-                        enriched.append(" <img src='").append(badgeSrc)
-                                .append("' style='display:inline-block;vertical-align:middle'/>");
+                        enriched.append(" <img src=\"").append(badgeSrc)
+                                .append("\" style=\"display:inline-block;vertical-align:middle\"/>");
                     }
                 }
                 paraIndex++;
@@ -209,35 +207,46 @@ public class CommentEnrichmentService {
         return CommonUtils.escapeHtml(s);
     }
 
-    private String encodeParam(String s) {
-        return CommonUtils.urlEncode(s);
-    }
-
     /**
-     * 生成段评徽章图片引用（D1/D2/D3）
+     * 生成段评徽章图片引用。
      * <p>
-     * 返回相对 URL：{@code /api/fqnovel/comment-badge/{count}} + 点击元数据
-     * {@code ,{"click":"showCmt(\"<url>\",\"番茄\",true)","style":"text"}}。
-     * 点击 JS 使用双引号字符串并整体经 {@link CommonUtils#escapeJson} 转义，
-     * 保证输出属性值内不含裸单引号（img 属性以单引号输出，任何 DOM 解析器不会截断）；
-     * URL 查询参数中的 {@code &} 保持原样，不做 HTML 转义。
+     * 输出形如：{@code {baseUrl}/api/fqnovel/comment-badge/{count},{"click":"showCmt2(bookId,chapterId,paraIndex)","style":"text"}}。
+     * <p>
+     * 格式依据阅读魔改版（喵公子 beta / LegadoTeam legado）正文管线的真实实现逆向确定，
+     * 其 imgPattern 为 {@code <img[^>]*src="([^"]*(?:"[^>]+\})?)"[^>]*>}——src 为双引号属性，
+     * 内部允许一段以 } 结尾的裸双引号 JSON（正则的可选组 {@code "[^>]+\}} 专为此设计）；
+     * 提取后按 {@code ,\s*(?=\{} } 切出选项，Gson 解析 {@code Map<String,String>} 取 click/style/width。
+     * 因此：
+     * <ul>
+     *   <li>src 属性必须用<b>双引号</b>包裹，选项 JSON 用<b>裸双引号</b>（不能用 &quot; 实体，
+     *       实体不会在正则阶段被解码，Gson 解析失败会导致整段图片被丢弃）；</li>
+     *   <li>click 值只传纯数字参数，避免任何引号转义在链路中丢失；</li>
+     *   <li>URL 必须是绝对地址，阅读端对正文内相对路径解析不可靠。</li>
+     * </ul>
      *
      * @param count      评论数
-     * @param commentUrl 段评页面相对 URL
-     * @return 徽章图片引用；count &le; 0 时返回 null
+     * @param bookId     书籍ID（数字串）
+     * @param chapterId  章节ID（数字串）
+     * @param paraIndex  段落索引
+     * @param baseUrl    服务对外基址
+     * @return 徽章图片引用；count &le; 0 或 ID 非纯数字时返回 null（保证 click JS 无字符串）
      */
-    private String generateBadgeSrc(int count, String commentUrl) {
-        if (count <= 0) return null;
+    private String generateBadgeSrc(int count, String bookId, String chapterId, int paraIndex, String baseUrl) {
+        if (count <= 0 || baseUrl == null || baseUrl.isEmpty()) {
+            return null;
+        }
+        if (!isNumeric(bookId) || !isNumeric(chapterId)) {
+            log.warn("bookId/chapterId 非纯数字，跳过徽章注入以避免 click JS 转义问题: {}, {}", bookId, chapterId);
+            return null;
+        }
 
-        // 点击 JS：双引号字符串（url 先做 JSON 字符串转义）
-        String clickJs = "showCmt(\"" + escapeJsonStr(commentUrl) + "\",\"番茄\",true)";
-        // 整体再转义一次后嵌入 JSON（\" -> \\\"），最终属性值内无裸单引号
-        String clickMeta = "{\"click\":\"" + escapeJsonStr(clickJs) + "\",\"style\":\"text\"}";
+        String clickJs = "showCmt2(" + bookId + "," + chapterId + "," + paraIndex + ")";
+        String clickMeta = ",{\"click\":\"" + clickJs + "\",\"style\":\"text\"}";
 
-        return BADGE_PATH + count + "," + clickMeta;
+        return baseUrl + BADGE_PATH + count + clickMeta;
     }
 
-    private String escapeJsonStr(String s) {
-        return CommonUtils.escapeJson(s);
+    private boolean isNumeric(String s) {
+        return s != null && s.matches("\\d+");
     }
 }

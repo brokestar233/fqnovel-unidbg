@@ -9,14 +9,15 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import javax.annotation.Resource;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 
@@ -44,6 +45,24 @@ public class FQNovelService {
     private DevicePoolService devicePoolService;
 
     private static final int ILLEGAL_ACCESS_RECOVERY_THRESHOLD = 2;
+
+    /**
+     * 单章请求合并窗口（毫秒）。Legado 下载/预加载会并发打来大量单章请求，
+     * 在窗口内合并为一次 batch_full 上游调用，避免散请求打爆上游触发风控。
+     */
+    @Value("${fq.api.chapter-coalesce.window-ms:1500}")
+    private long chapterCoalesceWindowMs;
+
+    @Value("${fq.api.chapter-coalesce.max-batch:30}")
+    private int chapterCoalesceMaxBatch;
+
+    private final ScheduledExecutorService coalesceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "chapter-coalesce");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private final ConcurrentHashMap<String, ChapterBatchWindow> chapterWindows = new ConcurrentHashMap<>();
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
@@ -579,6 +598,116 @@ public class FQNovelService {
      * @param request 包含书籍ID和章节ID的请求
      * @return 章节内容
      */
+    /**
+     * 合并窗口的批次结果：响应 + 实际使用的设备（解密密钥按设备走，需要回传给每个等待者）。
+     */
+    public static final class CoalescedChapterBatch {
+        private final FQNovelResponse<FQBatchFullResponse> response;
+        private final DeviceInfo device;
+
+        CoalescedChapterBatch(FQNovelResponse<FQBatchFullResponse> response, DeviceInfo device) {
+            this.response = response;
+            this.device = device;
+        }
+
+        public FQNovelResponse<FQBatchFullResponse> getResponse() {
+            return response;
+        }
+
+        public DeviceInfo getDevice() {
+            return device;
+        }
+    }
+
+    private static final class ChapterBatchWindow {
+        private final List<PendingChapter> items = new ArrayList<>();
+        private final AtomicBoolean flushed = new AtomicBoolean(false);
+    }
+
+    private static final class PendingChapter {
+        private final String chapterId;
+        private final CompletableFuture<CoalescedChapterBatch> future;
+
+        private PendingChapter(String chapterId, CompletableFuture<CoalescedChapterBatch> future) {
+            this.chapterId = chapterId;
+            this.future = future;
+        }
+    }
+
+    /**
+     * 单章请求进入合并窗口：同书同模式的请求在 window-ms 内聚合，
+     * 攒够 max-batch 立即冲洗，否则由定时器在窗口到期时冲洗为一次 batch_full 调用。
+     */
+    private CompletableFuture<CoalescedChapterBatch> fetchChapterCoalesced(String bookId, String chapterId, boolean download) {
+        String key = bookId + "|" + download;
+        PendingChapter pending = new PendingChapter(chapterId, new CompletableFuture<>());
+        while (true) {
+            ChapterBatchWindow window = chapterWindows.compute(key, (k, old) -> {
+                if (old == null || old.flushed.get()) {
+                    ChapterBatchWindow fresh = new ChapterBatchWindow();
+                    coalesceScheduler.schedule(() -> flushChapterWindow(key, fresh),
+                        Math.max(100, chapterCoalesceWindowMs), TimeUnit.MILLISECONDS);
+                    return fresh;
+                }
+                return old;
+            });
+            synchronized (window.items) {
+                if (window.flushed.get()) {
+                    continue; // 窗口刚被冲洗，重走 compute 建新窗口
+                }
+                window.items.add(pending);
+            }
+            if (chapterCoalesceMaxBatch > 0 && window.items.size() >= chapterCoalesceMaxBatch) {
+                flushChapterWindow(key, window);
+            }
+            return pending.future;
+        }
+    }
+
+    private void flushChapterWindow(String key, ChapterBatchWindow window) {
+        if (!window.flushed.compareAndSet(false, true)) {
+            return;
+        }
+        chapterWindows.remove(key, window);
+
+        List<PendingChapter> batch;
+        synchronized (window.items) {
+            batch = new ArrayList<>(window.items);
+        }
+        if (batch.isEmpty()) {
+            return;
+        }
+
+        LinkedHashSet<String> distinctIds = new LinkedHashSet<>();
+        for (PendingChapter p : batch) {
+            distinctIds.add(p.chapterId);
+        }
+        String itemIds = String.join(",", distinctIds);
+        int sep = key.lastIndexOf('|');
+        String bookId = key.substring(0, sep);
+        boolean download = "true".equals(key.substring(sep + 1));
+
+        long start = System.currentTimeMillis();
+        AtomicReference<DeviceInfo> deviceRef = new AtomicReference<>();
+        log.info("章节合并窗口冲洗: bookId={}, 待处理={}, 去重后={}", bookId, batch.size(), distinctIds.size());
+        batchFull(itemIds, bookId, download, null, deviceRef).whenComplete((resp, err) -> {
+            CoalescedChapterBatch result;
+            if (err != null) {
+                log.warn("章节合并批次上游调用失败: bookId={}, items={}, 耗时={}ms, 原因={}",
+                    bookId, distinctIds.size(), System.currentTimeMillis() - start, String.valueOf(err));
+                result = new CoalescedChapterBatch(
+                    FQNovelResponse.error("章节合并批次失败: " + err.getMessage()), deviceRef.get());
+            } else {
+                log.info("章节合并批次完成: bookId={}, items={}, 耗时={}ms",
+                    bookId, distinctIds.size(), System.currentTimeMillis() - start);
+                result = new CoalescedChapterBatch(resp, deviceRef.get());
+            }
+            for (PendingChapter p : batch) {
+                p.future.complete(result);
+            }
+        });
+    }
+
     public CompletableFuture<FQNovelResponse<FQNovelChapterInfo>> getChapterContent(FQNovelRequest request) {
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -589,9 +718,18 @@ public class FQNovelService {
                 DeviceInfo requestedDevice = resolveRequestDevice(request.getDeviceId(), "getChapterContent");
                 AtomicReference<DeviceInfo> successfulDeviceRef = new AtomicReference<>(requestedDevice);
 
-                // 使用batch_full API获取完整响应数据
-                String itemIds = request.getChapterId();
-                FQNovelResponse<FQBatchFullResponse> batchResponse = batchFull(itemIds, request.getBookId(), false, requestedDevice, successfulDeviceRef).get();
+                FQNovelResponse<FQBatchFullResponse> batchResponse;
+                if (requestedDevice == null) {
+                    // 无指定设备的单章请求进入合并窗口：并发散请求合并为一次 batch_full 上游调用
+                    CoalescedChapterBatch coalesced =
+                        fetchChapterCoalesced(request.getBookId(), request.getChapterId(), false).join();
+                    batchResponse = coalesced.getResponse();
+                    successfulDeviceRef.set(coalesced.getDevice());
+                } else {
+                    // 指定设备的请求（如图片代理同设备校验）不合并，保持原路径
+                    batchResponse = batchFull(request.getChapterId(), request.getBookId(), false,
+                        requestedDevice, successfulDeviceRef).get();
+                }
 
                 if (batchResponse.getCode() != 0 || batchResponse.getData() == null) {
                     return FQNovelResponse.error("获取章节内容失败: " + batchResponse.getMessage());

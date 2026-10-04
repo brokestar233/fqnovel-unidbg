@@ -119,6 +119,12 @@ public class HttpClientConfig {
                 }
             }
             log.info("检测到 SOCKS5 代理配置: {}:{}，Apache HttpClient 将通过代理连接", socksProxyHost, port);
+            if (useAuth) {
+                String sessionMode = (socksProxyUsername == null || socksProxyUsername.isEmpty())
+                        ? "设备池每设备一个 session（固定出口 IPv6）"
+                        : "固定 session: " + socksProxyUsername;
+                log.info("SOCKS5 代理启用用户名/密码认证，session 策略: {}", sessionMode);
+            }
 
             plainSocketFactory = new SocksProxyConnectionSocketFactory(socksProxyHost, port,
                     socksProxyUsername, socksProxyPassword);

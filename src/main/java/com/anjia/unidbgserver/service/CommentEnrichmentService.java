@@ -240,7 +240,10 @@ public class CommentEnrichmentService {
             return null;
         }
 
-        String clickJs = "showCmt2(" + bookId + "," + chapterId + "," + paraIndex + ")";
+        // click 用标签模板语法 showCmt2`id,id,n`：参数以字符串到达 jsLib，19 位 ID 不会
+        // 被 JS 浮点舍入（书号/章节号超 Number.MAX_SAFE_INTEGER）；且整段 JS 无括号无引号，
+        // 对阅读端替换净化规则免疫。jsLib 的 showCmt2 同时兼容普通调用。
+        String clickJs = "showCmt2`" + bookId + "," + chapterId + "," + paraIndex + "`";
         String clickMeta = ",{\"click\":\"" + clickJs + "\",\"style\":\"text\"}";
 
         return baseUrl + BADGE_PATH + count + clickMeta;

@@ -40,8 +40,8 @@ class CommentEnrichmentServiceTest {
     void generateBadgeSrc_clickJsUsesNumericArgsOnly() throws Exception {
         String result = invokeGenerateBadgeSrc(5, "123", "456", 2, BASE);
         assertNotNull(result);
-        assertTrue(result.contains(",{\"click\":\"showCmt2(123,456,2)\",\"style\":\"text\"}"),
-                "Click JS should be pure numeric args in standard JSON");
+        assertTrue(result.contains(",{\"click\":\"showCmt2`123,456,2`\",\"style\":\"text\"}"),
+                "Click JS should use tagged template with raw ids (no JS number precision loss)");
         assertFalse(result.contains("\\"), "Badge src must not contain backslash escapes");
         assertFalse(result.contains("'"), "Single quotes would break mod imgPattern's URL part");
     }
@@ -77,7 +77,7 @@ class CommentEnrichmentServiceTest {
         com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
         Map<String, Object> optionMap = om.readValue(optionJson,
                 new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-        assertEquals("showCmt2(123,456,0)", optionMap.get("click"));
+        assertEquals("showCmt2`123,456,0`", optionMap.get("click"));
         assertEquals("text", optionMap.get("style"));
     }
 
@@ -112,8 +112,8 @@ class CommentEnrichmentServiceTest {
         String result = invokeInjectCommentIcons(content, commentCounts, "123", "456");
         assertTrue(result.contains("<img src=\"" + BASE + "/api/fqnovel/comment-badge/5,"),
                 "Should contain img tag with absolute badge URL in double-quoted src");
-        assertTrue(result.contains("showCmt2(123,456,0)"),
-                "Click JS should carry numeric book/chapter/para identifiers");
+        assertTrue(result.contains("showCmt2`123,456,0`"),
+                "Click JS should carry full-precision ids via tagged template");
     }
 
     @Test
@@ -167,7 +167,7 @@ class CommentEnrichmentServiceTest {
                 "Title line should be rendered without icon");
         // 段落索引与 API para_index 对齐（实况验证：标题行不占索引）：
         // 标题行(不递增)、空行(1)、正文第一段(1)、空行(2)、正文第二段(3)
-        assertTrue(result.contains("showCmt2(123,456,1)") && result.contains("showCmt2(123,456,3)"),
+        assertTrue(result.contains("showCmt2`123,456,1`") && result.contains("showCmt2`123,456,3`"),
                 "Content paragraphs should use paraIndex=1 and paraIndex=3 (title does not occupy index 0)");
         // Title is before first img; ensure no img between title and first content
         int titleEnd = result.indexOf("</p>") + 4;
@@ -185,9 +185,9 @@ class CommentEnrichmentServiceTest {
         commentCounts.put(1, 3); // 第二个正文段落 → para_index 1
 
         String result = invokeInjectCommentIcons(content, commentCounts, "123", "456", "第一章 标题");
-        assertTrue(result.contains("showCmt2(123,456,0)") && result.contains("showCmt2(123,456,1)"),
+        assertTrue(result.contains("showCmt2`123,456,0`") && result.contains("showCmt2`123,456,1`"),
                 "First content paragraph should map to para_index=0 (title line not counted)");
-        assertFalse(result.contains("showCmt2(123,456,2)"),
+        assertFalse(result.contains("showCmt2`123,456,2`"),
                 "No icon should be shifted one line up onto the previous paragraph");
     }
 
@@ -199,9 +199,9 @@ class CommentEnrichmentServiceTest {
         commentCounts.put(2, 5); // 第三段的评论在 para_index=2
 
         String result = invokeInjectCommentIcons(content, commentCounts, "123", "456");
-        assertTrue(result.contains("showCmt2(123,456,2)"),
+        assertTrue(result.contains("showCmt2`123,456,2`"),
                 "Blank line should advance index so para 3 maps to index 2");
-        assertFalse(result.contains("showCmt2(123,456,1)"),
+        assertFalse(result.contains("showCmt2`123,456,1`"),
                 "No icon should be placed at the blank line index");
     }
 

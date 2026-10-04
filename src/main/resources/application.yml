@@ -1,6 +1,13 @@
 server:
   port: ${SERVER_PORT:8099}
   address: 0.0.0.0
+  tomcat:
+    # 段评徽章 img src 携带阅读 URL 选项后缀 ,{"click":...}
+    # 部分阅读版本加载图片时不剥离后缀、原样请求，路径含 {"} 会被
+    # Tomcat 以非法字符拒绝(400)导致徽章全部碎图。放行这些字符后，
+    # 徽章端点只取路径前导数字、忽略其余部分，仍正常返回 PNG。
+    relaxed-path-chars: '",{,}'
+    relaxed-query-chars: '",<,{,},^,`,|'
   compression:
     enabled: true
     mime-types: application/json,application/xml,text/html,text/xml,text/plain,text/css,application/javascript,image/svg+xml
@@ -24,6 +31,12 @@ fq:
 spring:
   application:
     name: unidbg-boot-server
+  mvc:
+    async:
+      # 异步请求超时：章节获取（1.5s合并窗口+上游batch_full重试+段评统计）
+      # 在风控期可远超默认30s；与阅读书源端120s超时对齐，避免服务端先掐断
+      # 导致 App 收到503后回显本地缓存的旧正文
+      request-timeout: 120000
   web:
     resources:
       cache:

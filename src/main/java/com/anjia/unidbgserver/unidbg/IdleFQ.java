@@ -109,6 +109,7 @@ public class IdleFQ extends AbstractJni implements IOResolver<AndroidFileIO> {
             log.info("IdleFQ初始化完成");
         } catch (Exception e) {
             log.error("IdleFQ初始化失败", e);
+            cleanupRootfsDir();
             throw new RuntimeException("IdleFQ初始化失败", e);
         }
     }
@@ -430,7 +431,11 @@ public class IdleFQ extends AbstractJni implements IOResolver<AndroidFileIO> {
     }
 
     /**
-     * 释放资源
+     * 释放资源。
+     * <p>
+     * rootfs 临时目录是本实例私有的（createTempDir 新建），随实例销毁删除；
+     * deleteOnExit 只在 JVM 退出时生效，长驻进程中引擎重置会不断遗留目录，
+     * 曾导致路由器存储被逐步写满。
      */
     public void destroy() {
         if (emulator != null) {
@@ -440,6 +445,23 @@ public class IdleFQ extends AbstractJni implements IOResolver<AndroidFileIO> {
             } catch (Exception e) {
                 log.error("关闭模拟器失败", e);
             }
+        }
+        cleanupRootfsDir();
+    }
+
+    private void cleanupRootfsDir() {
+        File dir = this.tempRootfsDir;
+        if (dir == null) {
+            return;
+        }
+        this.tempRootfsDir = null;
+        try {
+            if (dir.exists()) {
+                org.apache.commons.io.FileUtils.deleteDirectory(dir);
+                log.debug("rootfs临时目录已清理: {}", dir.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            log.warn("清理rootfs临时目录失败（将遗留至JVM退出）: {}", dir.getAbsolutePath(), e);
         }
     }
 }

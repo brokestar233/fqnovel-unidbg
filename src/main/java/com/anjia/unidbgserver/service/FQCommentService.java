@@ -1,7 +1,9 @@
 package com.anjia.unidbgserver.service;
 
 import com.anjia.unidbgserver.dto.*;
+import com.anjia.unidbgserver.utils.CommonUtils;
 import com.anjia.unidbgserver.utils.FQApiUtils;
+import com.anjia.unidbgserver.utils.GzipUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -10,12 +12,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import javax.annotation.Resource;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.zip.GZIPInputStream;
 
 @Slf4j
 @Service
@@ -40,7 +38,7 @@ public class FQCommentService {
         return CompletableFuture.supplyAsync(() -> {
             DeviceInfo device = devicePoolService.nextDevice();
             String path = "/novel/commentapi/idea/list/" + request.getChapterId() + "/v1";
-            Map<String, String> queryParams = fqApiUtils.buildCommonApiParams(new FqVariable(device));
+            Map<String, String> queryParams = fqApiUtils.buildCommonApiParams(new FQVariable(device));
 
             Map<String, Object> businessParam = new LinkedHashMap<>();
             if (request.getBookId() != null && !request.getBookId().trim().isEmpty()) {
@@ -63,7 +61,7 @@ public class FQCommentService {
         return CompletableFuture.supplyAsync(() -> {
             DeviceInfo device = devicePoolService.nextDevice();
             String path = "/novel/commentapi/comment/list/" + request.getChapterId() + "/v1";
-            Map<String, String> queryParams = fqApiUtils.buildCommonApiParams(new FqVariable(device));
+            Map<String, String> queryParams = fqApiUtils.buildCommonApiParams(new FQVariable(device));
 
             Map<String, Object> businessParam = new LinkedHashMap<>();
             businessParam.put("book_id", request.getBookId());
@@ -83,6 +81,31 @@ public class FQCommentService {
             }
 
             return executeCommentPost(path, queryParams, bodyMap, "段评详情", request.getChapterId());
+        });
+    }
+
+    public CompletableFuture<FQNovelResponse<JsonNode>> getReplyList(FQCommentReplyListRequest request) {
+        return CompletableFuture.supplyAsync(() -> {
+            DeviceInfo device = devicePoolService.nextDevice();
+            String path = "/novel/commentapi/reply/list/" + request.getCommentId() + "/v1";
+            Map<String, String> queryParams = fqApiUtils.buildCommonApiParams(new FQVariable(device));
+
+            Map<String, Object> businessParam = new LinkedHashMap<>();
+            businessParam.put("book_id", request.getBookId());
+            businessParam.put("need_count", true);
+
+            Map<String, Object> bodyMap = new LinkedHashMap<>();
+            bodyMap.put("comment_id", request.getCommentId());
+            bodyMap.put("group_id", request.getChapterId());
+            bodyMap.put("group_type", request.getGroupType() != null ? request.getGroupType() : 15);
+            bodyMap.put("comment_source", request.getCommentSource() != null ? request.getCommentSource() : 502);
+            bodyMap.put("business_param", businessParam);
+            bodyMap.put("count", request.getCount() != null ? request.getCount() : 20);
+            if (request.getCursor() != null && !request.getCursor().isEmpty()) {
+                bodyMap.put("cursor", request.getCursor());
+            }
+
+            return executeCommentPost(path, queryParams, bodyMap, "段评回复列表", request.getCommentId());
         });
     }
 
@@ -107,6 +130,12 @@ public class FQCommentService {
                 headers.put("Content-Type", "application/json");
                 Map<String, String> signedHeaders = fqEncryptServiceWorker.generateSignatureHeaders(fullUrl, headers).get();
 
+                // 签名失败时返回 {"error": ...}，不能当 HTTP header 静默发出
+                if (signedHeaders.containsKey("error")) {
+                    log.warn("{}签名生成失败: {} - chapterId: {}", apiLabel, signedHeaders.get("error"), chapterId);
+                    throw new RuntimeException("签名生成失败: " + signedHeaders.get("error"));
+                }
+
                 Object commentSource = bodyMap.get("comment_source");
 
                 HttpHeaders httpHeaders = new HttpHeaders();
@@ -118,7 +147,11 @@ public class FQCommentService {
                 httpHeaders.set("server-channel", "17");
 
                 HttpEntity<String> entity = new HttpEntity<>(body, httpHeaders);
-                log.warn("段评请求 - url={}, headers={}, body={}", fullUrl, httpHeaders, body);
+                // 只记录脱敏后的调试信息（完整 headers 含 Cookie/签名头，WARN 级刷屏且泄密）
+                log.debug("段评请求 - url={}, body={}, cookie={}",
+                        fullUrl,
+                        CommonUtils.preview(body, 512),
+                        currentDevice != null ? currentDevice.getCookie() : null);
                 ResponseEntity<byte[]> response = restTemplate.exchange(fullUrl, HttpMethod.POST, entity, byte[].class);
 
                 String responseBody = decompressGzipResponse(response.getBody());
@@ -144,30 +177,10 @@ public class FQCommentService {
     }
 
     private String decompressGzipResponse(byte[] gzipData) throws Exception {
-        if (gzipData == null || gzipData.length == 0) {
-            return "";
-        }
-        boolean isGzip = gzipData.length >= 2
-            && gzipData[0] == (byte) 0x1f
-            && gzipData[1] == (byte) 0x8b;
-
-        if (!isGzip) {
-            return new String(gzipData, StandardCharsets.UTF_8);
-        }
-        try (GZIPInputStream gzipInputStream = new GZIPInputStream(new ByteArrayInputStream(gzipData))) {
-            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            int length;
-            while ((length = gzipInputStream.read(buffer)) != -1) {
-                byteArrayOutputStream.write(buffer, 0, length);
-            }
-            return new String(byteArrayOutputStream.toByteArray(), StandardCharsets.UTF_8);
-        }
+        return GzipUtils.decodeBody(gzipData);
     }
 
     private boolean isEmptyResponseError(Exception e) {
-        String message = e.getMessage();
-        return "EMPTY_RESPONSE".equals(message)
-            || (message != null && message.contains("No content to map due to end-of-input"));
+        return CommonUtils.isEmptyResponseError(e);
     }
 }

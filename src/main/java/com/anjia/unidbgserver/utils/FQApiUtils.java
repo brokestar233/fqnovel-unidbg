@@ -3,11 +3,12 @@ package com.anjia.unidbgserver.utils;
 import com.anjia.unidbgserver.config.FQApiProperties;
 import com.anjia.unidbgserver.dto.DeviceInfo;
 import com.anjia.unidbgserver.dto.FQSearchRequest;
-import com.anjia.unidbgserver.dto.FqVariable;
+import com.anjia.unidbgserver.dto.FQVariable;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
-import java.io.UnsupportedEncodingException;
+import static com.anjia.unidbgserver.utils.CommonUtils.firstNonBlank;
+
 import java.net.URLEncoder;
 import java.util.*;
 
@@ -23,12 +24,12 @@ public class FQApiUtils {
 
     /**
      * 构建通用API请求参数
-     * 从FqVariable提取通用参数并构建Map
+     * 从FQVariable提取通用参数并构建Map
      *
      * @param var FQ变量配置
      * @return 参数映射
      */
-    public Map<String, String> buildCommonApiParams(FqVariable var) {
+    public Map<String, String> buildCommonApiParams(FQVariable var) {
         Map<String, String> params = new HashMap<>();
 
         // 基础设备参数
@@ -77,7 +78,7 @@ public class FQApiUtils {
      * @param download 是否下载模式
      * @return 参数映射
      */
-    public Map<String, String> buildBatchFullParams(FqVariable var, String itemIds, String bookId, boolean download) {
+    public Map<String, String> buildBatchFullParams(FQVariable var, String itemIds, String bookId, boolean download) {
         Map<String, String> params = buildCommonApiParams(var);
 
         // batchFull特定参数
@@ -237,7 +238,7 @@ public class FQApiUtils {
         }
     }
 
-public Map<String, String> buildSearchParams(FqVariable var, FQSearchRequest searchRequest) {
+public Map<String, String> buildSearchParams(FQVariable var, FQSearchRequest searchRequest) {
     Map<String, String> params = buildCommonApiParams(var);
 
     // 搜索特定参数，全部补齐，部分可动态生成
@@ -309,7 +310,7 @@ public Map<String, String> buildSearchParams(FqVariable var, FQSearchRequest sea
      * @param directoryRequest 目录请求参数
      * @return 参数映射
      */
-    public Map<String, String> buildDirectoryParams(FqVariable var, com.anjia.unidbgserver.dto.FQDirectoryRequest directoryRequest) {
+    public Map<String, String> buildDirectoryParams(FQVariable var, com.anjia.unidbgserver.dto.FQDirectoryRequest directoryRequest) {
         Map<String, String> params = buildCommonApiParams(var);
 
         // 目录特定参数
@@ -340,15 +341,16 @@ public Map<String, String> buildSearchParams(FqVariable var, FQSearchRequest sea
         return fqApiProperties.getBaseUrl();
     }
 
+    /**
+     * 获取搜索/目录API基础URL
+     * 某些API使用独立的域名后缀
+     */
+    public String getSearchBaseUrl() {
+        String searchUrl = fqApiProperties.getSearchApiBaseUrl();
+        return searchUrl != null && !searchUrl.isEmpty() ? searchUrl : fqApiProperties.getBaseUrl();
+    }
+
     private String firstNonBlank(String... values) {
-        if (values == null) {
-            return "";
-        }
-        for (String value : values) {
-            if (value != null && !value.trim().isEmpty()) {
-                return value;
-            }
-        }
-        return "";
+        return com.anjia.unidbgserver.utils.CommonUtils.firstNonBlank(values);
     }
 }

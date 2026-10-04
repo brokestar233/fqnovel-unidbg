@@ -1,7 +1,6 @@
 package com.anjia.unidbgserver.web;
 
 import com.anjia.unidbgserver.service.FQEncryptServiceWorker;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -9,6 +8,7 @@ import org.springframework.web.bind.annotation.*;
 import javax.annotation.Resource;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @RestController
@@ -23,9 +23,8 @@ public class FQEncryptController {
      * @param request 包含 url 和 headers 的请求体
      * @return 包含各种签名header的结果
      */
-    @SneakyThrows
-    @RequestMapping(value = "generateSignature", method = {RequestMethod.POST})
-    public Map<String, String> generateSignature(@RequestBody Map<String, String> request) {
+    @PostMapping("generateSignature")
+    public CompletableFuture<Map<String, String>> generateSignature(@RequestBody Map<String, String> request) {
         String url = request.get("url");
         String headers = request.get("headers");
 
@@ -39,19 +38,10 @@ public class FQEncryptController {
             headers = "";
         }
 
-        if (log.isDebugEnabled()) {
-            log.debug("接收到FQ签名请求 - URL: {}", url);
-            log.debug("接收到FQ签名请求 - Headers: {}", headers);
-        }
+        log.debug("接收到FQ签名请求 - URL: {}", url);
 
-        // 调用服务生成签名
-        Map<String, String> result = fqSignatureServiceWorker.generateSignatureHeaders(url, headers).get();
-
-        if (log.isDebugEnabled()) {
-            log.debug("FQ签名生成完成，结果数量: {}", result.size());
-        }
-
-        return result;
+        // 返回 CompletableFuture，由 Spring 异步完成，不阻塞 servlet 线程
+        return fqSignatureServiceWorker.generateSignatureHeaders(url, headers);
     }
 
     /**
@@ -59,31 +49,28 @@ public class FQEncryptController {
      * @param request 包含 url 和 headerMap 的请求体
      * @return 包含各种签名header的结果
      */
-    @SneakyThrows
-    @RequestMapping(value = "generateSignatureWithMap", method = {RequestMethod.POST})
-    public Map<String, String> generateSignatureWithMap(@RequestBody Map<String, Object> request) {
-        String url = (String) request.get("url");
-        @SuppressWarnings("unchecked")
-        Map<String, String> headerMap = (Map<String, String>) request.get("headerMap");
+    @SuppressWarnings("unchecked")
+    @PostMapping("generateSignatureWithMap")
+    public CompletableFuture<Map<String, String>> generateSignatureWithMap(@RequestBody Map<String, Object> request) {
+        String url = request.get("url") != null ? request.get("url").toString() : null;
+
+        // 防御性校验：headerMap 必须是 Map，避免 ClassCastException
+        Map<String, String> headerMap = null;
+        Object rawHeaderMap = request.get("headerMap");
+        if (rawHeaderMap instanceof Map) {
+            headerMap = (Map<String, String>) rawHeaderMap;
+        } else if (rawHeaderMap != null) {
+            throw new IllegalArgumentException("headerMap 必须是 JSON 对象");
+        }
 
         // 检查必需的参数
         if (url == null || url.trim().isEmpty()) {
             throw new IllegalArgumentException("URL参数不能为空");
         }
 
-        if (log.isDebugEnabled()) {
-            log.debug("接收到FQ签名请求(Map格式) - URL: {}", url);
-            log.debug("接收到FQ签名请求(Map格式) - HeaderMap: {}", headerMap);
-        }
+        log.debug("接收到FQ签名请求(Map格式) - URL: {}", url);
 
-        // 调用服务生成签名
-        Map<String, String> result = fqSignatureServiceWorker.generateSignatureHeaders(url, headerMap).get();
-
-        if (log.isDebugEnabled()) {
-            log.debug("FQ签名生成完成，结果数量: {}", result.size());
-        }
-
-        return result;
+        return fqSignatureServiceWorker.generateSignatureHeaders(url, headerMap);
     }
 
     /**
@@ -91,9 +78,8 @@ public class FQEncryptController {
      * @param request 包含 url 的请求体
      * @return 包含各种签名header的结果
      */
-    @SneakyThrows
-    @RequestMapping(value = "generateSignatureSimple", method = {RequestMethod.POST})
-    public Map<String, String> generateSignatureSimple(@RequestBody Map<String, String> request) {
+    @PostMapping("generateSignatureSimple")
+    public CompletableFuture<Map<String, String>> generateSignatureSimple(@RequestBody Map<String, String> request) {
         String url = request.get("url");
 
         // 检查必需的参数
@@ -101,18 +87,9 @@ public class FQEncryptController {
             throw new IllegalArgumentException("URL参数不能为空");
         }
 
-        if (log.isDebugEnabled()) {
-            log.debug("接收到FQ简化签名请求 - URL: {}", url);
-        }
+        log.debug("接收到FQ简化签名请求 - URL: {}", url);
 
-        // 调用服务生成签名
-        Map<String, String> result = fqSignatureServiceWorker.generateSignatureHeaders(url, "").get();
-
-        if (log.isDebugEnabled()) {
-            log.debug("FQ简化签名生成完成，结果数量: {}", result.size());
-        }
-
-        return result;
+        return fqSignatureServiceWorker.generateSignatureHeaders(url, "");
     }
 
     /**
@@ -120,33 +97,23 @@ public class FQEncryptController {
      * @param url 请求的URL
      * @return 包含各种签名header的结果
      */
-    @SneakyThrows
-    @RequestMapping(value = "test", method = {RequestMethod.GET})
-    public Map<String, String> testSignature(@RequestParam String url) {
+    @GetMapping("test")
+    public CompletableFuture<Map<String, String>> testSignature(@RequestParam String url) {
         // 检查必需的参数
         if (url == null || url.trim().isEmpty()) {
             throw new IllegalArgumentException("URL参数不能为空");
         }
 
-        if (log.isDebugEnabled()) {
-            log.debug("接收到FQ测试签名请求 - URL: {}", url);
-        }
+        log.debug("接收到FQ测试签名请求 - URL: {}", url);
 
-        // 调用服务生成签名
-        Map<String, String> result = fqSignatureServiceWorker.generateSignatureHeaders(url, "").get();
-
-        if (log.isDebugEnabled()) {
-            log.debug("FQ测试签名生成完成，结果数量: {}", result.size());
-        }
-
-        return result;
+        return fqSignatureServiceWorker.generateSignatureHeaders(url, "");
     }
 
     /**
      * 健康检查接口
      * @return 服务状态
      */
-    @RequestMapping(value = "health", method = {RequestMethod.GET})
+    @GetMapping("health")
     public Map<String, Object> health() {
         Map<String, Object> healthStatus = new HashMap<>();
         healthStatus.put("status", "UP");

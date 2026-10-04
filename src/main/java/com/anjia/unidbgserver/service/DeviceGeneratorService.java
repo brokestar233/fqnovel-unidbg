@@ -5,6 +5,7 @@ import com.anjia.unidbgserver.dto.DeviceRegisterRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
@@ -86,6 +87,11 @@ public class DeviceGeneratorService {
         RESOLUTIONS.add(createResolution("1920*1080", 480, "xxhdpi"));
         RESOLUTIONS.add(createResolution("2560*1440", 560, "xxxhdpi"));
         RESOLUTIONS.add(createResolution("3200*1440", 640, "xxxhdpi"));
+
+        // 只读包装，防止运行时被意外修改
+        DEVICE_BRANDS.replaceAll((k, v) -> Collections.unmodifiableList(v));
+        ANDROID_VERSIONS.replaceAll(Collections::unmodifiableMap);
+        RESOLUTIONS.replaceAll(Collections::unmodifiableMap);
     }
 
     private static Map<String, Object> createAndroidVersion(String version, Integer api, String release) {
@@ -243,12 +249,17 @@ public class DeviceGeneratorService {
     }
 
     /**
-     * MD5编码
+     * MD5编码（显式 UTF-8，与 DeviceRegisterClientService 保持一致）
+     *
+     * 注意：此处 MD5 为协议必需算法，不可替换为 SHA-256——
+     * OpenUDID 由服务端（fqnovel/ByteDance device_register）按真实 App 算法
+     * md5(androidId) + md5(md5(androidId))[0:8] 校验生成，替换会导致设备注册失败。
+     * 该哈希不承担任何完整性/认证职责，无安全碰撞风险暴露面。
      */
     private String md5Encode(String text) {
         try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] digest = md.digest(text.getBytes());
+            MessageDigest md = MessageDigest.getInstance("MD5"); // mimosa-ignore 协议必需算法，见上方注释；不承担完整性/认证职责
+            byte[] digest = md.digest(text.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder();
             for (byte b : digest) {
                 sb.append(String.format("%02x", b));

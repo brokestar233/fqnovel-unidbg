@@ -2,6 +2,7 @@ package com.anjia.unidbgserver.web;
 
 import com.anjia.unidbgserver.dto.FQCommentIdeaRequest;
 import com.anjia.unidbgserver.dto.FQCommentListRequest;
+import com.anjia.unidbgserver.dto.FQCommentReplyListRequest;
 import com.anjia.unidbgserver.dto.FQNovelResponse;
 import com.anjia.unidbgserver.service.FQCommentService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,13 +23,26 @@ public class FQCommentController {
     @Autowired
     private FQCommentService fqCommentService;
 
+    @PostMapping("/reply/list")
+    public CompletableFuture<FQNovelResponse<JsonNode>> getReplyList(
+            @RequestBody FQCommentReplyListRequest request) {
+
+        log.debug("段评回复列表请求 - commentId: {}, chapterId: {}",
+                request.getCommentId(), request.getChapterId());
+
+        if (request.getCommentId() == null || request.getCommentId().trim().isEmpty()) {
+            return CompletableFuture.completedFuture(
+                FQNovelResponse.error("评论ID不能为空"));
+        }
+
+        return fqCommentService.getReplyList(request);
+    }
+
     @PostMapping("/idea")
     public CompletableFuture<FQNovelResponse<JsonNode>> getCommentIdeaList(
             @RequestBody FQCommentIdeaRequest request) {
 
-        if (log.isDebugEnabled()) {
-            log.debug("段评统计请求 - chapterId: {}", request.getChapterId());
-        }
+        log.debug("段评统计请求 - chapterId: {}", request.getChapterId());
 
         if (request.getChapterId() == null || request.getChapterId().trim().isEmpty()) {
             return CompletableFuture.completedFuture(
@@ -42,10 +56,8 @@ public class FQCommentController {
     public CompletableFuture<FQNovelResponse<JsonNode>> getCommentList(
             @RequestBody FQCommentListRequest request) {
 
-        if (log.isDebugEnabled()) {
-            log.debug("段评详情请求 - chapterId: {}, paraIndex: {}",
+        log.debug("段评详情请求 - chapterId: {}, paraIndex: {}",
                 request.getChapterId(), request.getParaIndex());
-        }
 
         if (request.getChapterId() == null || request.getChapterId().trim().isEmpty()) {
             return CompletableFuture.completedFuture(

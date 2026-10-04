@@ -1,6 +1,9 @@
 server:
   port: ${SERVER_PORT:8099}
   address: 0.0.0.0
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain,text/css,application/javascript,image/svg+xml
 application:
   unidbg:
     dynarmic: false
@@ -14,7 +17,6 @@ application:
 fq:
   api:
     base-url: https://api5-normal-sinfonlineb.fqnovel.com
-    comment-api-base-url: https://api.fqnovel.com
     cookie: store-region=cn-zj; store-region-src=did; install_id=2420480337007787;
     device-pool:
       enabled: true
@@ -22,8 +24,11 @@ fq:
 spring:
   application:
     name: unidbg-boot-server
-  profiles:
-    active: prod
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          max-age: 7d
   task:
     execution:
       pool:
@@ -31,10 +36,17 @@ spring:
         core-size: 8
         keep-alive: 60s
         max-size: 8
+  sleuth:
+    sampler:
+      probability: 0.1
+    async:
+      enabled: true
+      configurer:
+        enabled: true
   redis:
-    host: 0.0.0.0
+    host: 127.0.0.1
     port: 26586
-    password: HT5aRYBK2HpReaQuYkLcg
+    # 密码通过环境变量注入：spring.redis.password=${REDIS_PASSWORD:}
     database: 0
     timeout: 5000ms
     lettuce:
@@ -43,3 +55,6 @@ spring:
         max-idle: 8
         min-idle: 0
         max-wait: -1ms
+logging:
+  level:
+    root: info

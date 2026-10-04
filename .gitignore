@@ -51,3 +51,26 @@ tools/results/
 
 ### Docker ###
 .env
+
+### Sisyphus work evidence ###
+.sisyphus/
+
+### OpenCode ###
+.omo/
+opencode.jsonc
+
+### Runtime ###
+.hermes/
+
+### Local tooling ###
+.claude/
+.codegraph/
+.mimosa/
+.opencode/
+openspec/
+
+### Python venv ###
+tools/venv/
+
+### Build artifacts ###
+/fqnovel-unidbg.jar
